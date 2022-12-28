@@ -1,0 +1,11 @@
+<component name="libraryTable">
+  <library name="github.alexandrnikitin.bloom.filter_2.12" type="repository">
+    <properties maven-id="com.github.alexandrnikitin:bloom-filter_2.12:0.11.0" />
+    <CLASSES>
+      <root url="jar://$MAVEN_REPOSITORY$/com/github/alexandrnikitin/bloom-filter_2.12/0.11.0/bloom-filter_2.12-0.11.0.jar!/" />
+      <root url="jar://$MAVEN_REPOSITORY$/org/scala-lang/scala-library/2.12.2/scala-library-2.12.2.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
