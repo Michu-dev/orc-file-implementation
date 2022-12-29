@@ -13,22 +13,31 @@ object Main extends App {
 
   def showEffectiveness(orcFile: OrcFile[String], word: String): Unit = {
     var startTime = System.nanoTime()
-    val tuplesGroupsByStatistics = orcFile.stripes.flatMap(_.tuplesGroups).map(_.contents).filter(tg =>  tg.min == word || tg.max == word)
+    val contentsByStatistics = orcFile.stripes.flatMap(_.tuplesGroups).map(tuplesGroup => (tuplesGroup.min, tuplesGroup.max)).filter(x => x._1 == word || x._2 == word)
     var endTime = System.nanoTime()
     val elapsedTimeByStatistics = TimeUnit.MILLISECONDS.convert(endTime - startTime, TimeUnit.MILLISECONDS)
-    var doesBelong = tuplesGroupsByStatistics.contains(word)
-    println(s"Elapsed time by searching ${word} using statistics: ${elapsedTimeByStatistics}")
-    println(s"Did used filter find searched word using statistics: ${doesBelong}")
+    var doesBelong = contentsByStatistics.size > 0
+
+    println(s"Elapsed time by searching ${word} using statistics (ms): ${elapsedTimeByStatistics}")
+    println(s"Did used filter find found word using statistics: ${doesBelong}")
     println("------------")
     startTime = System.nanoTime()
-    val tuplesGroupsByBloomFilter = orcFile.stripes.flatMap(_.tuplesGroups).filter(_.bf.mightContain(word))
+    val contentsByBloomFilter = orcFile.stripes.flatMap(_.tuplesGroups).filter(_.bf.mightContain(word))
     endTime = System.nanoTime()
     val elapsedTimeByBloomFilter = TimeUnit.MILLISECONDS.convert(endTime - startTime, TimeUnit.MILLISECONDS)
-    doesBelong = tuplesGroupsByBloomFilter.contains(word)
-    println(s"Elapsed time by searching ${word} using Bloom filter: ${elapsedTimeByBloomFilter}")
-    println(s"Did used filter find searched word using Bloom filter: ${doesBelong}")
+    doesBelong = contentsByBloomFilter.size > 0
+
+    println(s"Elapsed time by searching ${word} using Bloom filter (ms): ${elapsedTimeByBloomFilter}")
+    println(s"Did used filter find found word using Bloom filter: ${doesBelong}")
 
     println()
+  }
+
+  def compareTuplesGroupsNumber(orcFile: OrcFile[String], word: String, isBloomFilter: String): Seq[TuplesGroup[String]] = {
+    if (isBloomFilter == "Bloom") {
+      return orcFile.stripes.flatMap(_.tuplesGroups).filter(tg => tg.bf.mightContain(word))
+    }
+    return orcFile.stripes.flatMap(_.tuplesGroups).filter { tg => tg.min == word || tg.max == word }
   }
 
   val filename = "cano.txt"
@@ -54,7 +63,7 @@ object Main extends App {
     val tuplesGroupWords = words.slice(i, endIndex)
     val tuplesGroupBf = BloomFilter[String](tuplesGroupNumber, falsePositive)
     tuplesGroupWords.foreach(tuplesGroupBf.add)
-    val tuplesGroup = TuplesGroup[String](tuplesGroupBf, tuplesGroupWords.min, tuplesGroupWords.max, tuplesGroupWords: _*)
+    val tuplesGroup = TuplesGroup[String](tuplesGroupBf, tuplesGroupWords.groupBy(identity).minBy(_._2.size)._1, tuplesGroupWords.groupBy(identity).maxBy(_._2.size)._1, tuplesGroupWords: _*)
     tuplesGroups += tuplesGroup
     i = endIndex
   }
@@ -69,13 +78,13 @@ object Main extends App {
     val stripeTuplesGroups = tuplesGroups.slice(i, endIndex)
     val stripeBf = BloomFilter[String](stripeNumber, falsePositive)
     stripeTuplesGroups.foreach(_.contents.foreach(stripeBf.add))
-    val stripe = Stripe[String](stripeBf, stripeTuplesGroups.map(_.min).min, stripeTuplesGroups.map(_.max).max, stripeTuplesGroups: _*)
+    val stripe = Stripe[String](stripeBf, stripeTuplesGroups.map(_.min).groupBy(identity).minBy(_._2.size)._1, stripeTuplesGroups.map(_.max).groupBy(identity).maxBy(_._2.size)._1, stripeTuplesGroups: _*)
     stripes += stripe
     i = endIndex
   }
 
   // Create the OrcFile to hold the Stripes
-  val orcFile = OrcFile[String](bf, words.min, words.max, stripes: _*)
+  val orcFile = OrcFile[String](bf, stripes.map(_.min).groupBy(identity).minBy(_._2.size)._1, stripes.map(_.max).groupBy(identity).maxBy(_._2.size)._1, stripes: _*)
 
   // Compare the effectiveness of using statistics based on min and max with the effectiveness of using Bloom filters
   val mostFrequentWord = words.groupBy(identity).maxBy(_._2.size)._1
@@ -83,14 +92,23 @@ object Main extends App {
   val searchedWord = "pipe"
 
   // Compare the number of tuples groups requiring exact analyzing in both cases
-  val tuplesGroupsByStatistics = orcFile.stripes.flatMap(_.tuplesGroups).filter { tg => tg.min == mostFrequentWord || tg.min == lessFrequentWord || tg.min == searchedWord ||
-    tg.max == mostFrequentWord || tg.max == lessFrequentWord || tg.max == searchedWord }
+  val tuplesGroupsMaxByStatistics = compareTuplesGroupsNumber(orcFile, mostFrequentWord, "Statistics")
+  val tuplesGroupsMinByStatistics = compareTuplesGroupsNumber(orcFile, lessFrequentWord, "Statistics")
+  val tuplesGroupsPipeByStatistics = compareTuplesGroupsNumber(orcFile, searchedWord, "Statistics")
 
-  val tuplesGroupsByBloomFilter = orcFile.stripes.flatMap(_.tuplesGroups).filter( tg => tg.bf.mightContain(mostFrequentWord) || tg.bf.mightContain(lessFrequentWord) || tg.bf.mightContain(searchedWord))
+  val tuplesGroupsMaxByBloomFilter = compareTuplesGroupsNumber(orcFile, mostFrequentWord, "Bloom")
+  val tuplesGroupsMinByBloomFilter = compareTuplesGroupsNumber(orcFile, lessFrequentWord, "Bloom")
+  val tuplesGroupsPipeByBloomFilter = compareTuplesGroupsNumber(orcFile, searchedWord, "Bloom")
 
+  println(s"Number of tuples groups requiring exact analyzing searching most frequent word (statistics): ${tuplesGroupsMaxByStatistics.size}")
+  println(s"Number of tuples groups requiring exact analyzing searching most frequent word (Bloom filter): ${tuplesGroupsMaxByBloomFilter.size}")
 
-  println(s"Number of tuples groups requiring exact analyzing (statistics): ${tuplesGroupsByStatistics.size}")
-  println(s"Number of tuples groups requiring exact analyzing (Bloom filter): ${tuplesGroupsByBloomFilter.size}")
+  println(s"Number of tuples groups requiring exact analyzing searching less frequent word (statistics): ${tuplesGroupsMinByStatistics.size}")
+  println(s"Number of tuples groups requiring exact analyzing searching less frequent word (Bloom filter): ${tuplesGroupsMinByBloomFilter.size}")
+
+  println(s"Number of tuples groups requiring exact analyzing searching 'pipe' (statistics): ${tuplesGroupsPipeByStatistics.size}")
+  println(s"Number of tuples groups requiring exact analyzing searching 'pipe' (Bloom filter): ${tuplesGroupsPipeByBloomFilter.size}")
+  println("--------------------------------------------------------------------------------------")
 
   // Compare the time for searching the words: most frequent, less frequent and 'pipe'
   showEffectiveness(orcFile, mostFrequentWord)
@@ -104,78 +122,3 @@ object Main extends App {
   println(s"Ratio: ${sizeOfBloomFilter.toDouble / sizeOfWords}")
 
 }
-
-
-//object Main extends App {
-//
-//  val filename = "cano.txt"
-//  val tuplesGroupNumber = 10000
-//  val stripeNumber = 100000
-//  val fileNumber = 1000000
-//  val falsePositive = 0.1
-//
-//  val lines = Source.fromFile(filename).getLines.toList
-//  var wordsForTuplesGroups = List()
-//  var wordsForStripes = List()
-//  var wordsForOrcFile = List()
-//
-//  var tuplesGroups = List()
-//  var stripes = List()
-//
-//  var wordsCounter = 0
-//  var tuplesGroupsCounter = 0
-//  var stripesCounter = 0
-//
-//  var freqMap = wordsForTuplesGroups.groupBy(identity).mapValues(_.size)
-//  var max = "dsa"
-//  var min = "das"
-//  var bf = BloomFilter[String](tuplesGroupNumber, falsePositive)
-//
-//  for(line <- lines) {
-//    val wordsInLine = line.split(" ")
-//
-//
-//    for (word <- wordsInLine) {
-//      if (wordsCounter == 10000) {
-//        freqMap = wordsForTuplesGroups.groupBy(identity).mapValues(_.size)
-//        max = freqMap.maxBy(_._2)._1
-//        min = freqMap.minBy(_._2)._1
-//        bf = BloomFilter[String](tuplesGroupNumber, falsePositive)
-//        tuplesGroups :+ TuplesGroup[String](bf, min, max, max)
-//        tuplesGroupsCounter += 1
-//
-//        if (tuplesGroupsCounter == 10) {
-//          freqMap = wordsForStripes.groupBy(identity).mapValues(_.size)
-//          max = freqMap.maxBy(_._2)._1
-//          min = freqMap.minBy(_._2)._1
-//          bf = BloomFilter[String](stripeNumber, falsePositive)
-//          stripes :+ Stripe(bf, min, max, tuplesGroups)
-//          wordsForStripes = List(word)
-//        } else {
-//          wordsForStripes :+ word
-//        }
-//
-//        wordsForTuplesGroups = List(word)
-//        wordsCounter = 1
-//      } else {
-//        wordsForTuplesGroups :+ word
-//        wordsForStripes :+ word
-//        wordsForOrcFile :+ word
-//        wordsCounter += 1
-//      }
-//    }
-//  }
-//  freqMap = wordsForOrcFile.groupBy(identity).mapValues(_.size)
-//  max = freqMap.maxBy(_._2)._1
-//  min = freqMap.minBy(_._2)._1
-//  bf = BloomFilter[String](fileNumber, falsePositive)
-//
-//  var orcFile = OrcFile(bf, min, max, stripes)
-//
-//  println(max)
-//
-//
-//
-//
-//
-//}
